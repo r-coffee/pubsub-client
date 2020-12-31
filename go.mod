@@ -1,4 +1,4 @@
-module pubsub-client
+module github.com/r-coffee/pubsub-client
 
 go 1.15
 
