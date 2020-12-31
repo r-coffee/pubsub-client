@@ -1,10 +1,9 @@
-package main
+package psclient
 
 import (
 	"errors"
 	"log"
 	"net"
-	"sync"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -15,7 +14,8 @@ type Client struct {
 	con      net.Conn
 }
 
-func createClient(endpoint string) (*Client, error) {
+// CreateClient creates a new client
+func CreateClient(endpoint string) (*Client, error) {
 	var c Client
 	c.endpoint = endpoint
 	con, err := net.Dial("tcp", endpoint)
@@ -26,7 +26,8 @@ func createClient(endpoint string) (*Client, error) {
 	return &c, nil
 }
 
-func (c *Client) publish(topic string, dat []byte) error {
+// Publish a message to the topic
+func (c *Client) Publish(topic string, dat []byte) error {
 	var msg ClientMessage
 	msg.Kind = "Publish"
 	msg.Topic = topic
@@ -56,7 +57,8 @@ func (c *Client) publish(topic string, dat []byte) error {
 	return nil
 }
 
-func (c *Client) ack(topic, sub, id string) error {
+// Ack acknowledge the message
+func (c *Client) Ack(topic, sub, id string) error {
 	var msg ClientMessage
 	msg.Kind = "Ack"
 	msg.Topic = topic
@@ -87,14 +89,17 @@ func (c *Client) ack(topic, sub, id string) error {
 	return nil
 }
 
-type payload struct {
+// Payload the message format
+type Payload struct {
 	ID   string
 	Data []byte
 }
 
-type callback func(p payload) error
+// Callback a function that receives a payload
+type Callback func(p Payload) error
 
-func (c *Client) subscribe(topic, subscription string, fn callback) error {
+// Subscribe to a topic via a subscription
+func (c *Client) Subscribe(topic, subscription string, fn Callback) error {
 	con, err := net.Dial("tcp", c.endpoint)
 	if err != nil {
 		return err
@@ -131,7 +136,7 @@ func (c *Client) subscribe(topic, subscription string, fn callback) error {
 		}
 
 		if msg.Kind == "Data" {
-			var p payload
+			var p Payload
 			p.ID = msg.ID
 			p.Data = msg.Payload
 			err = fn(p)
@@ -140,57 +145,4 @@ func (c *Client) subscribe(topic, subscription string, fn callback) error {
 			}
 		}
 	}
-}
-
-func main() {
-	c, err := createClient("localhost:7777")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// publish message to foo topic
-	err = c.publish("foo", []byte("testing"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = c.publish("foo", []byte("testing 123"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// start a subscriber loop (subscribe to bar subscription of foo topic)
-	var mux sync.Mutex
-	err = c.subscribe("foo", "bar", func(p payload) error {
-		mux.Lock()
-		defer mux.Unlock()
-
-		log.Println(string(p.Data))
-
-		return c.ack("foo", "bar", p.ID)
-	})
-
-	/*var msg ClientMessage
-	msg.Kind = "Foo"
-	msg.Topic = "Bar"
-	raw, err := proto.Marshal(&msg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	con, err := net.Dial("tcp", "localhost:7777")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	n, err := con.Write(raw)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("wrote %d bytes", n)
-
-	err = con.Close()
-	if err != nil {
-		log.Fatal(err)
-	}*/
 }

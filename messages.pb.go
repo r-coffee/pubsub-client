@@ -4,7 +4,7 @@
 // 	protoc        v3.13.0
 // source: messages.proto
 
-package main
+package psclient
 
 import (
 	proto "github.com/golang/protobuf/proto"
