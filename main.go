@@ -59,8 +59,17 @@ func (c *Client) Publish(topic string, dat []byte) error {
 
 // Ack acknowledge the message
 func (c *Client) Ack(topic, sub, id string) error {
+	return c.respond(topic, sub, id, "Ack")
+}
+
+// Nack instruct server to send message again
+func (c *Client) Nack(topic, sub, id string) error {
+	return c.respond(topic, sub, id, "Nack")
+}
+
+func (c *Client) respond(topic, sub, id, kind string) error {
 	var msg ClientMessage
-	msg.Kind = "Ack"
+	msg.Kind = kind
 	msg.Topic = topic
 	msg.Subscription = sub
 	msg.ID = id
@@ -83,7 +92,7 @@ func (c *Client) Ack(topic, sub, id string) error {
 
 	// 0 bad, 1 good
 	if string(message) == "0" {
-		return errors.New("could not publish message")
+		return errors.New("could not ACK message")
 	}
 
 	return nil

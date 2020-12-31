@@ -21,6 +21,10 @@ err = c.Subscribe("foo", "bar", func(p Payload) error {
 
     log.Println(string(p.Data))
 
+    if someFailureCondition {
+        return c.Nack("foo", "bar", p.ID)
+    }
+
     return c.Ack("foo", "bar", p.ID)
 })
 ```
