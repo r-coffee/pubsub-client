@@ -31,6 +31,17 @@ func CreateClient(endpoint string) (*Client, error) {
 	return &c, nil
 }
 
+// ReConnect re-establish connection
+func (c *Client) ReConnect() error {
+	c.con.Close()
+	con, err := net.Dial("tcp", c.endpoint)
+	if err != nil {
+		return err
+	}
+	c.con = con
+	return nil
+}
+
 // Publish a message to the topic
 func (c *Client) Publish(topic string, dat []byte) error {
 	var msg ClientMessage
@@ -79,13 +90,6 @@ type Callback func(p Payload) error
 
 // Subscribe to a topic via a subscription
 func (c *Client) Subscribe(topic string, initialOffset uint64, fn Callback) error {
-	// TODO - do we need a separate connection for subscriptions???
-	/*con, err := net.Dial("tcp", c.endpoint)
-	if err != nil {
-		return err
-	}
-	defer con.Close()*/
-
 	// start the handler
 	go c.subscribeHandler(fn)
 
