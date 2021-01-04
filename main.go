@@ -19,7 +19,7 @@ type Client struct {
 }
 
 // CreateClient creates a new client
-func CreateClient(endpoint string) (*Client, error) {
+func CreateClient(endpoint string, producer bool) (*Client, error) {
 	var c Client
 	c.endpoint = endpoint
 	con, err := net.Dial("tcp", endpoint)
@@ -28,6 +28,11 @@ func CreateClient(endpoint string) (*Client, error) {
 	}
 	c.con = con
 	c.nm = createNetworkManager()
+
+	if producer {
+		go c.publishHandler()
+	}
+
 	return &c, nil
 }
 
@@ -146,7 +151,7 @@ func send(raw []byte) []byte {
 func producer() {
 	topic := "test"
 
-	c, err := CreateClient("localhost:7777")
+	c, err := CreateClient("localhost:7777", true)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -167,7 +172,7 @@ func producer() {
 
 func consumer() {
 	topic := "test"
-	c, err := CreateClient("localhost:7777")
+	c, err := CreateClient("localhost:7777", false)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -190,8 +195,7 @@ func consumer() {
 
 func benchmark() {
 	topic := "test"
-	c, _ := CreateClient("localhost:7777")
-	go c.publishHandler()
+	c, _ := CreateClient("localhost:7777", true)
 	for i := 0; i < 100000; i++ {
 		c.Publish(topic, []byte(fmt.Sprintf("this is benchmark: %d", i+1)))
 	}
