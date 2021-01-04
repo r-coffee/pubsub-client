@@ -1,9 +1,12 @@
 package psclient
 
 import (
-	"errors"
+	"encoding/binary"
+	"fmt"
 	"log"
 	"net"
+	sync "sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -12,6 +15,7 @@ import (
 type Client struct {
 	endpoint string
 	con      net.Conn
+	nm       *networkManager
 }
 
 // CreateClient creates a new client
@@ -23,6 +27,7 @@ func CreateClient(endpoint string) (*Client, error) {
 		return nil, err
 	}
 	c.con = con
+	c.nm = createNetworkManager()
 	return &c, nil
 }
 
@@ -37,121 +42,160 @@ func (c *Client) Publish(topic string, dat []byte) error {
 		return err
 	}
 
-	_, err = c.con.Write(raw)
+	_, err = c.con.Write(send(raw))
 	if err != nil {
 		return err
 	}
 
 	// get response
-	message := make([]byte, 1)
-	_, err = c.con.Read(message)
+	message := make([]byte, 4096)
+	length, err := c.con.Read(message)
 	if err != nil {
 		return err
 	}
 
-	// 0 bad, 1 good
-	if string(message) == "0" {
-		return errors.New("could not publish message")
-	}
+	c.nm.write(message[0:length])
 
 	return nil
 }
 
-// Ack acknowledge the message
-func (c *Client) Ack(topic, sub, id string) error {
-	return c.respond(topic, sub, id, "Ack")
-}
-
-// Nack instruct server to send message again
-func (c *Client) Nack(topic, sub, id string) error {
-	return c.respond(topic, sub, id, "Nack")
-}
-
-func (c *Client) respond(topic, sub, id, kind string) error {
-	var msg ClientMessage
-	msg.Kind = kind
-	msg.Topic = topic
-	msg.Subscription = sub
-	msg.ID = id
-	raw, err := proto.Marshal(&msg)
-	if err != nil {
-		return err
+func (c *Client) publishHandler() error {
+	for {
+		msg := <-c.nm.output
+		if msg.Kind == "NACK" {
+			log.Println("could not publish message")
+		}
 	}
-
-	_, err = c.con.Write(raw)
-	if err != nil {
-		return err
-	}
-
-	// get response
-	message := make([]byte, 1)
-	_, err = c.con.Read(message)
-	if err != nil {
-		return err
-	}
-
-	// 0 bad, 1 good
-	if string(message) == "0" {
-		return errors.New("could not ACK message")
-	}
-
-	return nil
 }
 
 // Payload the message format
 type Payload struct {
-	ID   string
-	Data []byte
+	Offset uint64
+	Data   []byte
 }
 
 // Callback a function that receives a payload
 type Callback func(p Payload) error
 
 // Subscribe to a topic via a subscription
-func (c *Client) Subscribe(topic, subscription string, fn Callback) error {
-	con, err := net.Dial("tcp", c.endpoint)
+func (c *Client) Subscribe(topic string, initialOffset uint64, fn Callback) error {
+	// TODO - do we need a separate connection for subscriptions???
+	/*con, err := net.Dial("tcp", c.endpoint)
 	if err != nil {
 		return err
 	}
+	defer con.Close()*/
+
+	// start the handler
+	go c.subscribeHandler(fn)
 
 	var msg ClientMessage
 	msg.Kind = "Subscribe"
 	msg.Topic = topic
-	msg.Subscription = subscription
+	msg.Offset = initialOffset
 	raw, err := proto.Marshal(&msg)
 	if err != nil {
 		return err
 	}
 
-	_, err = con.Write(raw)
+	_, err = c.con.Write(send(raw))
 	if err != nil {
 		return err
 	}
 
 	for {
 		message := make([]byte, 4096)
-		length, err := con.Read(message)
+		length, err := c.con.Read(message)
 
 		if err != nil {
-			con.Close()
+			log.Printf("can't read message %v", err)
 			return err
 		}
 
-		var msg ClientMessage
-		err = proto.Unmarshal(message[0:length], &msg)
-		if err != nil {
-			con.Close()
-			return err
-		}
+		c.nm.write(message[0:length])
+	}
+}
 
+func (c *Client) subscribeHandler(fn Callback) {
+	for {
+		msg := <-c.nm.output
 		if msg.Kind == "Data" {
 			var p Payload
-			p.ID = msg.ID
+			p.Offset = msg.Offset
 			p.Data = msg.Payload
-			err = fn(p)
+			err := fn(p)
 			if err != nil {
 				log.Println(err)
 			}
+		} else {
+			log.Printf("unknown kind: %s", msg.Kind)
 		}
 	}
+}
+
+func send(raw []byte) []byte {
+	bs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bs, uint32(len(raw)))
+	return append(bs, raw...)
+}
+
+func producer() {
+	topic := "test"
+
+	c, err := CreateClient("localhost:7777")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go c.publishHandler()
+
+	idx := 1
+	for {
+		msg := fmt.Sprintf("message%d", idx)
+		log.Println(msg)
+		err = c.Publish(topic, []byte(msg))
+		if err != nil {
+			log.Fatal(err)
+		}
+		idx++
+		time.Sleep(time.Second)
+	}
+}
+
+func consumer() {
+	topic := "test"
+	c, err := CreateClient("localhost:7777")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// start a subscriber loop (subscribe to bar subscription of foo topic)
+	var mux sync.Mutex
+	err = c.Subscribe(topic, 0, func(p Payload) error {
+		mux.Lock()
+		defer mux.Unlock()
+
+		log.Println(string(p.Data))
+		//time.Sleep(100 * time.Millisecond)
+
+		return nil
+	})
+	if err != nil {
+		log.Printf("subscription broken: %v", err)
+	}
+}
+
+func benchmark() {
+	topic := "test"
+	c, _ := CreateClient("localhost:7777")
+	go c.publishHandler()
+	for i := 0; i < 100000; i++ {
+		c.Publish(topic, []byte(fmt.Sprintf("this is benchmark: %d", i+1)))
+	}
+}
+
+func main() {
+	//producer()
+	consumer()
+
+	//benchmark()
 }
